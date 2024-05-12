@@ -1148,15 +1148,16 @@ class NullLogger:
         pass
 
 class PriceDB:
-    def __init__(self, filename):
+    def __init__(self, filename, use_existing=True):
         self.data = dict()
         self.last_update = 0
 
-        webprices = dl_price_data()
-        if webprices is not None:
-            incoming = webprices
-            self.load_incoming(incoming)
-            return
+        if not use_existing:
+            webprices = dl_price_data()
+            if webprices is not None:
+                incoming = webprices
+                self.load_incoming(incoming)
+                return
 
         if not os.path.exists(filename):
             logging.warning(f'price data not available. {filename} not found')
