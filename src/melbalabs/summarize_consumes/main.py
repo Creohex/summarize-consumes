@@ -149,6 +149,7 @@ def parse_ts2unixtime(timestamp):
 
 class HitsConsumable:
 
+
     COOLDOWNS = {
         'Dragonbreath Chili': 10 * 60,
         'Goblin Sapper Charge': 5 * 60,
@@ -1183,19 +1184,14 @@ class PriceDB:
 
 def get_consumable_price(pricedb, consumable):
     total_price = 0
+    components = CONSUMABLE_COMPONENTS.get(consumable, [(consumable, 1)])
 
-    components = CONSUMABLE_COMPONENTS.get(consumable)
-    if not components:
-        components = [(consumable, 1)]
-
-    for component in components:
-        consumable_component_name, multi = component
-
-        itemid = NAME2ITEMID.get(consumable_component_name)
+    for component, multiplicator in components:
+        itemid = NAME2ITEMID.get(component)
         if not itemid: continue
         price = pricedb.lookup(itemid)
         if not price: continue
-        total_price += int(price * multi)
+        total_price += int(price * multiplicator)
 
     total_price /= CONSUMABLE_CHARGES.get(consumable, 1)
     return total_price
@@ -1406,6 +1402,7 @@ class PrintConsumables:
         self.player = player
         self.pricedb = pricedb
         self.death_count = death_count
+        # self.data = self.calculate_consumes()
 
     def gold_string(self, price):
         copper = price % 100
@@ -2199,9 +2196,7 @@ def generate_output(app):
 
     return output
 
-def write_output(
-    output, write_summary,
-    ):
+def write_output(output, write_summary):
     if write_summary:
         filename = 'summary.txt'
         with open(filename, 'wb') as f:
@@ -2455,7 +2450,6 @@ def main():
                 print('writing comparison of players to', filename)
                 f.write(output.getvalue().encode('utf8'))
         feature()
-
 
     if not args.pastebin: return
     url = upload_pastebin(output)
