@@ -1426,6 +1426,25 @@ class PrintConsumables:
         if not total_price: return '', 0
         return self.gold_string(total_price), total_price
 
+    def calculate_consumes(self):
+        data = collections.defaultdict(lambda: {
+            "deaths": 0,
+            "total_spent": 0,
+            "items": {},
+        })
+
+        for name in sorted(self.player.keys()):
+            consumables = sorted(self.player[name])
+            data[name]["deaths"] = self.death_count[name]
+            for consumable in sorted(consumables):
+                count = self.player[name][consumable]
+                _, price = self.format_gold(consumable, count)
+                data[name]["total_spent"] += price
+                data[name]["items"][consumable] = price
+
+        return data
+
+    # TODO: redo this method to use self.data
     def print(self, output):
         names = sorted(self.player.keys())
         for name in names:
