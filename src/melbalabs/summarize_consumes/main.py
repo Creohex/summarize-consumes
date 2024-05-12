@@ -2293,6 +2293,59 @@ def check_existing_file(file: Path, force: bool = False) -> None:
             raise Exception(f"file already exists: {file}")
 
 
+def cost_representation_to_int(cost_string):
+    m = re.search(r"((?P<gold>\d+)g)?((?P<silver>\d+)s)?((?P<copper>\d+)c)?", cost_string)
+    return sum([int(m.group("gold") or 0) * 10000,
+                int(m.group("silver") or 0) * 100,
+                int(m.group("copper") or 0)])
+
+
+async def query_auction(session, id: int, name: str):
+    base_url = "https://www.wowauctions.net/auctionHouse/turtle-wow/nordanaar/mergedAh/"
+    item_str = f"{'-'.join(name.lower().split())}-{str(id)}"
+    url = base_url + item_str
+
+    async with session.get(url) as response:
+        if response.ok:
+            response_text = await response.text()
+        else:
+            print(f"Couldn't fetch data for '{name}'")
+            return None
+
+    soup = bs(response_text, "html.parser")
+    blocks = soup.find_all(
+        lambda tag: tag.name == "td" and "Average Buyout" in tag.get_text())
+
+    if len(blocks) != 1:
+        return None
+    cost_block = blocks[0].find_next_sibling()
+    return cost_representation_to_int(cost_block.text)
+
+
+def fetch_prices():
+    print("Fetching current AH prices...")
+    new_prices = {}
+
+    async def parallel_query(items):
+        async with aiohttp.ClientSession() as session:
+            tasks = [query_auction(session, item_id, item_name)
+                     for item_id, item_name
+                     in items.items()]
+            return await asyncio.gather(*tasks)
+
+    all_responses = asyncio.run(parallel_query(ITEMID2NAME))
+    for item_id, response in zip(ITEMID2NAME, all_responses):
+        new_prices[item_id] = response
+
+    prices_file = Path(__file__).absolute().parents[3] / "prices.json"
+    check_existing_file(prices_file, force=True)
+    with open(prices_file, "w") as fd:
+        json.dump({"data": collections.OrderedDict(sorted(new_prices.items())),
+                   "last_update": dt.now().timestamp(),
+                   "total_items": len(new_prices)},
+                  fd)
+
+    print("Prices have been updated -> prices.json")
 
 
 def main():
