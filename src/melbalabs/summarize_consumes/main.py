@@ -2279,6 +2279,19 @@ def open_browser(url):
     webbrowser.open(url)
 
 
+def check_existing_file(file: Path, force: bool = False) -> None:
+    """Check if file exist and deletes it when forced to.
+
+    - file (Path): File location
+    - force (bool | None, optional (False)): delete file if True
+    """
+
+    if file.exists():
+        if force or False:
+            file.unlink()
+        else:
+            raise Exception(f"file already exists: {file}")
+
 
 
 
