@@ -30,6 +30,10 @@ import melbalabs.summarize_consumes.package as package
 
 LarkError = lark.LarkError
 
+pio.renderers.default = "browser"
+"""Default rendering method for analytics."""
+
+
 class App:
     pass
 
@@ -2346,6 +2350,59 @@ def fetch_prices():
                   fd)
 
     print("Prices have been updated -> prices.json")
+
+
+def consumable_usage_comparison(data: dict, label: str) -> None:
+
+    data = collections.OrderedDict(sorted(data.items(),
+                                          key=lambda pair: -pair[1]["total_spent"]))
+
+    categories = list(data)
+    bar_values = [v["total_spent"] / 10000 for v in data.values()]
+
+    width = 3
+    height = len(data) // width + 2
+    specs = [[{'type': 'xy', 'colspan': width}] + [None] * (width - 1)]
+    specs.extend([[{'type': 'domain'}] * width] * (height - 1))
+
+    bar_chart_height = 400
+    pie_chart_height = 400
+
+    fig = make_subplots(
+            rows=height,
+            cols=width,
+            row_heights=[bar_chart_height] + [pie_chart_height] * (height - 1),
+            subplot_titles=[None] + list(data),
+            specs=specs,
+            print_grid=True)
+
+    fig.add_trace(go.Bar(x=categories,
+                         y=bar_values,
+                         name='Gold spent',
+                         text=[f"{v:.1f}g" for v in bar_values],
+                         textposition='outside'),
+                  row=1,
+                  col=1)
+
+    for pos, name in enumerate(categories):
+        item_labels = list(data[name]["items"].keys())
+        item_costs = [f"{cost:.1f}" for cost in data[name]["items"].values()]
+        fig.add_trace(
+            go.Pie(labels=item_labels,
+                   values=item_costs,
+                   showlegend=False,
+                   textposition='inside',
+                   textinfo='label+percent',
+                   name=name),
+            row=(pos // width) + 2,
+            col=(pos % width) + 1)
+
+    fig.update_layout(title=label,
+                      template="plotly_dark",
+                      title_x=0.5,
+                      height=bar_chart_height + (pie_chart_height * height - 1))
+
+    fig.show(post_script=['document.body.style.backgroundColor = "#000"; '])
 
 
 def main():
