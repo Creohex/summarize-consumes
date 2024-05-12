@@ -1,29 +1,38 @@
+import aiohttp
 import argparse
-import json
+import asyncio
 import collections
 import csv
 import datetime
+import functools
 import io
 import itertools
+import json
+import logging
 import os
 import re
-import sys
+import requests
 import time
 import webbrowser
-import functools
-import logging
 from datetime import datetime as dt
+from pathlib import Path
 
-import requests
 import humanize
 import lark
-
+import plotly.graph_objects as go
+import plotly.io as pio
+from bs4 import BeautifulSoup as bs
+from plotly.subplots import make_subplots
 
 from melbalabs.summarize_consumes import grammar
 import melbalabs.summarize_consumes.package as package
 
 
 LarkError = lark.LarkError
+
+pio.renderers.default = "browser"
+"""Default rendering method for analytics."""
+
 
 class App:
     pass
@@ -140,6 +149,7 @@ def parse_ts2unixtime(timestamp):
 
 class HitsConsumable:
 
+
     COOLDOWNS = {
         'Dragonbreath Chili': 10 * 60,
         'Goblin Sapper Charge': 5 * 60,
@@ -189,6 +199,8 @@ RENAME_CONSUMABLE = {
     'Frost Power': 'Elixir of Frost Power',
     'Nature Protection ': 'Nature Protection',
     'Shadow Protection ': 'Shadow Protection',
+    'Fire Protection ': "Fire Protection",
+    'Frost Protection ': "Frost Protection",
     'Holy Protection ': 'Holy Protection',
     '100 energy': 'Thistle Tea',
     'Sharpen Weapon - Critical': 'Elemental Sharpening Stone',
@@ -231,10 +243,10 @@ CONSUMABLE_COMPONENTS = {
         ('Large Brilliant Shard', 2),
     ],
     "Spirit of Zanza": [
-        ('Zulian Coin', 3),
+        ('Blue Hakkari Bijou', 1),
     ],
     "Swiftness of Zanza": [
-        ('Zulian Coin', 3),
+        ('Blue Hakkari Bijou', 1),
     ],
     "Powerful Smelling Salts": [
         ('Deeprock Salt', 4),
@@ -282,7 +294,7 @@ NAME2ITEMID = {
     'Healing Potion - Major': 13446,
     'Healing Potion - Superior': 3928,
     'Elixir of the Giants': 9206,
-    'Zulian Coin': 19698,
+    'Blue Hakkari Bijou': 19708,
     "Rumsey Rum Black Label": 21151,
     'Consecrated Sharpening Stone': 23122,
     'Invulnerability': 3387,
@@ -291,6 +303,9 @@ NAME2ITEMID = {
     'Goblin Sapper Charge': 10646,
     "Medivh's Merlot": 61174,
     'Shadow Protection': 13459,
+    'Nature Protection': 6052,
+    'Fire Protection': 13457,
+    'Frost Protection': 13456,
     'Dreamshard Elixir': 61224,
     'Lesser Mana Oil': 20747,
     'Brilliant Mana Oil': 20748,
@@ -1138,15 +1153,16 @@ class NullLogger:
         pass
 
 class PriceDB:
-    def __init__(self, filename):
+    def __init__(self, filename, use_existing=True):
         self.data = dict()
         self.last_update = 0
 
-        webprices = dl_price_data()
-        if webprices is not None:
-            incoming = webprices
-            self.load_incoming(incoming)
-            return
+        if not use_existing:
+            webprices = dl_price_data()
+            if webprices is not None:
+                incoming = webprices
+                self.load_incoming(incoming)
+                return
 
         if not os.path.exists(filename):
             logging.warning(f'price data not available. {filename} not found')
@@ -1168,19 +1184,14 @@ class PriceDB:
 
 def get_consumable_price(pricedb, consumable):
     total_price = 0
+    components = CONSUMABLE_COMPONENTS.get(consumable, [(consumable, 1)])
 
-    components = CONSUMABLE_COMPONENTS.get(consumable)
-    if not components:
-        components = [(consumable, 1)]
-
-    for component in components:
-        consumable_component_name, multi = component
-
-        itemid = NAME2ITEMID.get(consumable_component_name)
+    for component, multiplicator in components:
+        itemid = NAME2ITEMID.get(component)
         if not itemid: continue
         price = pricedb.lookup(itemid)
         if not price: continue
-        total_price += int(price * multi)
+        total_price += int(price * multiplicator)
 
     total_price /= CONSUMABLE_CHARGES.get(consumable, 1)
     return total_price
@@ -1391,6 +1402,7 @@ class PrintConsumables:
         self.player = player
         self.pricedb = pricedb
         self.death_count = death_count
+        # self.data = self.calculate_consumes()
 
     def gold_string(self, price):
         copper = price % 100
@@ -1415,6 +1427,25 @@ class PrintConsumables:
         if not total_price: return '', 0
         return self.gold_string(total_price), total_price
 
+    def calculate_consumes(self):
+        data = collections.defaultdict(lambda: {
+            "deaths": 0,
+            "total_spent": 0,
+            "items": {},
+        })
+
+        for name in sorted(self.player.keys()):
+            consumables = sorted(self.player[name])
+            data[name]["deaths"] = self.death_count[name]
+            for consumable in sorted(consumables):
+                count = self.player[name][consumable]
+                _, price = self.format_gold(consumable, count)
+                data[name]["total_spent"] += price
+                data[name]["items"][consumable] = price
+
+        return data
+
+    # TODO: redo this method to use self.data
     def print(self, output):
         names = sorted(self.player.keys())
         for name in names:
@@ -2165,9 +2196,7 @@ def generate_output(app):
 
     return output
 
-def write_output(
-    output, write_summary,
-    ):
+def write_output(output, write_summary):
     if write_summary:
         filename = 'summary.txt'
         with open(filename, 'wb') as f:
@@ -2187,6 +2216,10 @@ def get_user_input():
 
     parser.add_argument('--compare-players', nargs=2, metavar=('PLAYER1', 'PLAYER2'), required=False, help='compare 2 players, output the difference in compare-players.txt')
     parser.add_argument('--expert-log-unparsed-lines', action='store_true', help='create an unparsed.txt with everything that was not parsed')
+
+    parser.add_argument('--fetch-ah', action='store_true', required=False, help='Fetch latest prices from auction house')
+    parser.add_argument('--compare', action='store_true', required=False, help='Compare players\'s consumable expenditures')
+
     args = parser.parse_args()
 
     return args
@@ -2245,7 +2278,126 @@ def open_browser(url):
     webbrowser.open(url)
 
 
+def check_existing_file(file: Path, force: bool = False) -> None:
+    """Check if file exist and deletes it when forced to.
 
+    - file (Path): File location
+    - force (bool | None, optional (False)): delete file if True
+    """
+
+    if file.exists():
+        if force or False:
+            file.unlink()
+        else:
+            raise Exception(f"file already exists: {file}")
+
+
+def cost_representation_to_int(cost_string):
+    m = re.search(r"((?P<gold>\d+)g)?((?P<silver>\d+)s)?((?P<copper>\d+)c)?", cost_string)
+    return sum([int(m.group("gold") or 0) * 10000,
+                int(m.group("silver") or 0) * 100,
+                int(m.group("copper") or 0)])
+
+
+async def query_auction(session, id: int, name: str):
+    base_url = "https://www.wowauctions.net/auctionHouse/turtle-wow/nordanaar/mergedAh/"
+    item_str = f"{'-'.join(name.lower().split())}-{str(id)}"
+    url = base_url + item_str
+
+    async with session.get(url) as response:
+        if response.ok:
+            response_text = await response.text()
+        else:
+            print(f"Couldn't fetch data for '{name}'")
+            return None
+
+    soup = bs(response_text, "html.parser")
+    blocks = soup.find_all(
+        lambda tag: tag.name == "td" and "Average Buyout" in tag.get_text())
+
+    if len(blocks) != 1:
+        return None
+    cost_block = blocks[0].find_next_sibling()
+    return cost_representation_to_int(cost_block.text)
+
+
+def fetch_prices():
+    print("Fetching current AH prices...")
+    new_prices = {}
+
+    async def parallel_query(items):
+        async with aiohttp.ClientSession() as session:
+            tasks = [query_auction(session, item_id, item_name)
+                     for item_id, item_name
+                     in items.items()]
+            return await asyncio.gather(*tasks)
+
+    all_responses = asyncio.run(parallel_query(ITEMID2NAME))
+    for item_id, response in zip(ITEMID2NAME, all_responses):
+        new_prices[item_id] = response
+
+    prices_file = Path(__file__).absolute().parents[3] / "prices.json"
+    check_existing_file(prices_file, force=True)
+    with open(prices_file, "w") as fd:
+        json.dump({"data": collections.OrderedDict(sorted(new_prices.items())),
+                   "last_update": dt.now().timestamp(),
+                   "total_items": len(new_prices)},
+                  fd)
+
+    print("Prices have been updated -> prices.json")
+
+
+def consumable_usage_comparison(data: dict, label: str) -> None:
+
+    data = collections.OrderedDict(sorted(data.items(),
+                                          key=lambda pair: -pair[1]["total_spent"]))
+
+    categories = list(data)
+    bar_values = [v["total_spent"] / 10000 for v in data.values()]
+
+    width = 3
+    height = len(data) // width + 2
+    specs = [[{'type': 'xy', 'colspan': width}] + [None] * (width - 1)]
+    specs.extend([[{'type': 'domain'}] * width] * (height - 1))
+
+    bar_chart_height = 400
+    pie_chart_height = 400
+
+    fig = make_subplots(
+            rows=height,
+            cols=width,
+            row_heights=[bar_chart_height] + [pie_chart_height] * (height - 1),
+            subplot_titles=[None] + list(data),
+            specs=specs,
+            print_grid=True)
+
+    fig.add_trace(go.Bar(x=categories,
+                         y=bar_values,
+                         name='Gold spent',
+                         text=[f"{v:.1f}g" for v in bar_values],
+                         textposition='outside'),
+                  row=1,
+                  col=1)
+
+    for pos, name in enumerate(categories):
+        item_labels = list(data[name]["items"].keys())
+        item_costs = [f"{cost:.1f}" for cost in data[name]["items"].values()]
+        fig.add_trace(
+            go.Pie(labels=item_labels,
+                   values=item_costs,
+                   showlegend=False,
+                   textposition='inside',
+                   textinfo='label+percent',
+                   name=name),
+            row=(pos // width) + 2,
+            col=(pos % width) + 1)
+
+    fig.update_layout(title=label,
+                      template="plotly_dark",
+                      title_x=0.5,
+                      height=bar_chart_height + (pie_chart_height * height - 1))
+
+    fig.show(post_script=['document.body.style.backgroundColor = "#000"; '])
 
 
 def main():
@@ -2258,10 +2410,20 @@ def main():
         expert_log_unparsed_lines=args.expert_log_unparsed_lines,
     )
 
+    if args.fetch_ah:
+        fetch_prices()
+
     parse_log(app, filename=args.logpath)
 
     output = generate_output(app)
     write_output(output, write_summary=args.write_summary)
+
+    if args.compare:
+        date_readable = dt.fromtimestamp(app.techinfo.time_start).strftime('%A, %B %d, %Y')
+        consumable_usage_comparison(
+            data=app.print_consumables.calculate_consumes(),
+            label=f"Consumables usage information (prices last updated @ {date_readable})")
+        exit(0)
 
     if args.write_consumable_totals_csv:
         def feature():
@@ -2288,7 +2450,6 @@ def main():
                 print('writing comparison of players to', filename)
                 f.write(output.getvalue().encode('utf8'))
         feature()
-
 
     if not args.pastebin: return
     url = upload_pastebin(output)

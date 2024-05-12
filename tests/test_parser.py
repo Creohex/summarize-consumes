@@ -1480,5 +1480,3 @@ def test_dmgstore(app):
     assert store[('Agonist', 'Obsidian Eradicator', 'Deep Wound')].dmg == 81
     assert store[('Palapus', 'Molten Giant', 'reflect')].dmg == 35
     assert store[("Kel'Thuzad", 'Cracklinoats', 'Spirit Link')].dmg == 27
-
-
