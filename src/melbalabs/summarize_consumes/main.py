@@ -2217,6 +2217,10 @@ def get_user_input():
 
     parser.add_argument('--compare-players', nargs=2, metavar=('PLAYER1', 'PLAYER2'), required=False, help='compare 2 players, output the difference in compare-players.txt')
     parser.add_argument('--expert-log-unparsed-lines', action='store_true', help='create an unparsed.txt with everything that was not parsed')
+
+    parser.add_argument('--fetch-ah', action='store_true', required=False, help='Fetch latest prices from auction house')
+    parser.add_argument('--compare', action='store_true', required=False, help='Compare players\'s consumable expenditures')
+
     args = parser.parse_args()
 
     return args
@@ -2288,10 +2292,20 @@ def main():
         expert_log_unparsed_lines=args.expert_log_unparsed_lines,
     )
 
+    if args.fetch_ah:
+        fetch_prices()
+
     parse_log(app, filename=args.logpath)
 
     output = generate_output(app)
     write_output(output, write_summary=args.write_summary)
+
+    if args.compare:
+        date_readable = dt.fromtimestamp(app.techinfo.time_start).strftime('%A, %B %d, %Y')
+        consumable_usage_comparison(
+            data=app.print_consumables.calculate_consumes(),
+            label=f"Consumables usage information (prices last updated @ {date_readable})")
+        exit(0)
 
     if args.write_consumable_totals_csv:
         def feature():
