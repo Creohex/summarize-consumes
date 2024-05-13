@@ -1441,7 +1441,7 @@ class PrintConsumables:
                 count = self.player[name][consumable]
                 _, price = self.format_gold(consumable, count)
                 data[name]["total_spent"] += price
-                data[name]["items"][consumable] = price
+                data[name]["items"][consumable] = {"price": price, "count": count}
 
         return data
 
@@ -2361,15 +2361,14 @@ def consumable_usage_comparison(data: dict, label: str) -> None:
     specs.extend([[{'type': 'domain'}] * width] * (height - 1))
 
     bar_chart_height = 400
-    pie_chart_height = 400
+    pie_chart_height = 500
 
     fig = make_subplots(
             rows=height,
             cols=width,
             row_heights=[bar_chart_height] + [pie_chart_height] * (height - 1),
             subplot_titles=[None] + list(data),
-            specs=specs,
-            print_grid=True)
+            specs=specs)
 
     fig.add_trace(go.Bar(x=categories,
                          y=bar_values,
@@ -2380,24 +2379,29 @@ def consumable_usage_comparison(data: dict, label: str) -> None:
                   col=1)
 
     for pos, name in enumerate(categories):
-        item_labels = list(data[name]["items"].keys())
-        item_costs = [f"{cost:.1f}" for cost in data[name]["items"].values()]
+        item_costs = [cost_data['price'] / 10000.0 for cost_data in data[name]["items"].values()]
+        item_texts = [f"(x{item_data['count']}, {cost:.1f}g)"
+                      for (item_data, cost)
+                      in zip(data[name]["items"].values(), item_costs)]
         fig.add_trace(
-            go.Pie(labels=item_labels,
+            go.Pie(labels=list(data[name]["items"].keys()),
                    values=item_costs,
+                   text=item_texts,
                    showlegend=False,
                    textposition='inside',
-                   textinfo='label+percent',
+                   textinfo='label+percent+text',
                    name=name),
             row=(pos // width) + 2,
             col=(pos % width) + 1)
 
     fig.update_layout(title=label,
                       template="plotly_dark",
+                      plot_bgcolor="#282B2C",
+                      paper_bgcolor="#282B2C",
                       title_x=0.5,
                       height=bar_chart_height + (pie_chart_height * height - 1))
 
-    fig.show(post_script=['document.body.style.backgroundColor = "#000"; '])
+    fig.show(post_script=['document.body.style.backgroundColor = "#282B2C"; '])
 
 
 def main():
@@ -2423,7 +2427,7 @@ def main():
         consumable_usage_comparison(
             data=app.print_consumables.calculate_consumes(),
             label=f"Consumables usage information (prices last updated @ {date_readable})")
-        exit(0)
+        return
 
     if args.write_consumable_totals_csv:
         def feature():
