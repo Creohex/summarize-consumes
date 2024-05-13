@@ -103,7 +103,7 @@ def create_app(time_start, expert_log_unparsed_lines):
 
     app.hits_consumable = HitsConsumable(player=app.player, last_hit_cache=app.last_hit_cache)
 
-    app.pricedb = PriceDB('prices.json')
+    app.pricedb = PriceDB()
     app.print_consumables = PrintConsumables(player=app.player, pricedb=app.pricedb, death_count=app.death_count)
 
     app.print_consumable_totals_csv = PrintConsumableTotalsCsv(player=app.player, pricedb=app.pricedb, death_count=app.death_count)
@@ -1153,22 +1153,24 @@ class NullLogger:
         pass
 
 class PriceDB:
-    def __init__(self, filename, use_existing=True):
+    FILENAME_DEFAULT = "prices.json"
+
+    def __init__(self, filename: str=FILENAME_DEFAULT):
         self.data = dict()
         self.last_update = 0
+        self.filepath = Path(__file__).absolute().parent / (filename or self.FILENAME_DEFAULT)
 
-        if not use_existing:
-            webprices = dl_price_data()
-            if webprices is not None:
-                incoming = webprices
-                self.load_incoming(incoming)
-                return
+        # webprices = dl_price_data()
+        # if webprices is not None:
+        #     incoming = webprices
+        #     self.load_incoming(incoming)
+        #     return
 
-        if not os.path.exists(filename):
-            logging.warning(f'price data not available. {filename} not found')
-            return
-        logging.info('loading local price data from {filename}')
-        with open(filename) as f:
+        if not self.filepath.exists():
+            logging.warning(f'price data not available. {self.filepath} not found, trying to fetch fresh one...')
+            self.fetch_prices()
+        logging.info(f'loading local price data from {filename}')
+        with open(self.filepath) as f:
             incoming = json.load(f)
             self.load_incoming(incoming)
 
@@ -1180,6 +1182,59 @@ class PriceDB:
         for key, val in incoming['data'].items():
             key = int(key)
             self.data[key] = val
+
+    @staticmethod
+    def cost_representation_to_int(cost_string):
+        m = re.search(r"((?P<gold>\d+)g)?((?P<silver>\d+)s)?((?P<copper>\d+)c)?", cost_string)
+        return sum([int(m.group("gold") or 0) * 10000,
+                    int(m.group("silver") or 0) * 100,
+                    int(m.group("copper") or 0)])
+
+    @classmethod
+    async def query_auction(cls, session, id: int, name: str):
+        base_url = "https://www.wowauctions.net/auctionHouse/turtle-wow/nordanaar/mergedAh/"
+        item_str = f"{'-'.join(name.lower().split())}-{str(id)}"
+        url = base_url + item_str
+
+        async with session.get(url) as response:
+            if response.ok:
+                response_text = await response.text()
+            else:
+                logging.info(f"Couldn't fetch data for '{name}'")
+                return None
+
+        soup = bs(response_text, "html.parser")
+        blocks = soup.find_all(
+            lambda tag: tag.name == "td" and "Average Buyout" in tag.get_text())
+
+        if len(blocks) != 1:
+            return None
+        cost_block = blocks[0].find_next_sibling()
+        return cls.cost_representation_to_int(cost_block.text)
+
+    def fetch_prices(self):
+        logging.info("Fetching current AH prices...")
+        new_prices = {}
+
+        async def parallel_query(items):
+            async with aiohttp.ClientSession() as session:
+                tasks = [self.query_auction(session, item_id, item_name)
+                         for item_id, item_name
+                         in items.items()]
+                return await asyncio.gather(*tasks)
+
+        all_responses = asyncio.run(parallel_query(ITEMID2NAME))
+        for item_id, response in zip(ITEMID2NAME, all_responses):
+            new_prices[item_id] = response
+
+        check_existing_file(self.filepath, force=True)
+        with open(self.filepath, "w") as fd:
+            json.dump({"data": collections.OrderedDict(sorted(new_prices.items())),
+                       "last_update": dt.now().timestamp(),
+                       "total_items": len(new_prices)},
+                      fd)
+
+        logging.info(f"Prices have been updated -> {self.filepath}")
 
 
 def get_consumable_price(pricedb, consumable):
@@ -2285,66 +2340,11 @@ def check_existing_file(file: Path, force: bool = False) -> None:
     - force (bool | None, optional (False)): delete file if True
     """
 
-    if file.exists():
+    if file.exists() and file.is_file():
         if force or False:
             file.unlink()
         else:
             raise Exception(f"file already exists: {file}")
-
-
-def cost_representation_to_int(cost_string):
-    m = re.search(r"((?P<gold>\d+)g)?((?P<silver>\d+)s)?((?P<copper>\d+)c)?", cost_string)
-    return sum([int(m.group("gold") or 0) * 10000,
-                int(m.group("silver") or 0) * 100,
-                int(m.group("copper") or 0)])
-
-
-async def query_auction(session, id: int, name: str):
-    base_url = "https://www.wowauctions.net/auctionHouse/turtle-wow/nordanaar/mergedAh/"
-    item_str = f"{'-'.join(name.lower().split())}-{str(id)}"
-    url = base_url + item_str
-
-    async with session.get(url) as response:
-        if response.ok:
-            response_text = await response.text()
-        else:
-            print(f"Couldn't fetch data for '{name}'")
-            return None
-
-    soup = bs(response_text, "html.parser")
-    blocks = soup.find_all(
-        lambda tag: tag.name == "td" and "Average Buyout" in tag.get_text())
-
-    if len(blocks) != 1:
-        return None
-    cost_block = blocks[0].find_next_sibling()
-    return cost_representation_to_int(cost_block.text)
-
-
-def fetch_prices():
-    print("Fetching current AH prices...")
-    new_prices = {}
-
-    async def parallel_query(items):
-        async with aiohttp.ClientSession() as session:
-            tasks = [query_auction(session, item_id, item_name)
-                     for item_id, item_name
-                     in items.items()]
-            return await asyncio.gather(*tasks)
-
-    all_responses = asyncio.run(parallel_query(ITEMID2NAME))
-    for item_id, response in zip(ITEMID2NAME, all_responses):
-        new_prices[item_id] = response
-
-    prices_file = Path(__file__).absolute().parents[3] / "prices.json"
-    check_existing_file(prices_file, force=True)
-    with open(prices_file, "w") as fd:
-        json.dump({"data": collections.OrderedDict(sorted(new_prices.items())),
-                   "last_update": dt.now().timestamp(),
-                   "total_items": len(new_prices)},
-                  fd)
-
-    print("Prices have been updated -> prices.json")
 
 
 def consumable_usage_comparison(data: dict, label: str) -> None:
@@ -2415,7 +2415,7 @@ def main():
     )
 
     if args.fetch_ah:
-        fetch_prices()
+        app.pricedb.fetch_prices()
 
     parse_log(app, filename=args.logpath)
 
