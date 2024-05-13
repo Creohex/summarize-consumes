@@ -1,9 +1,7 @@
 import pytest
 
 from melbalabs.summarize_consumes.main import (
-    cost_representation_to_int,
-    query_auction,
-    fetch_prices,
+    PriceDB,
 )
 
 
@@ -20,4 +18,4 @@ from melbalabs.summarize_consumes.main import (
     ],
 )
 def test_cost_representation_to_int(s, expected):
-    assert cost_representation_to_int(s) == expected
+    assert PriceDB.cost_representation_to_int(s) == expected
