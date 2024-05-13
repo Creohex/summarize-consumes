@@ -2332,7 +2332,6 @@ def open_browser(url):
     print(f'opening browser with {url}')
     webbrowser.open(url)
 
-
 def check_existing_file(file: Path, force: bool = False) -> None:
     """Check if file exist and deletes it when forced to.
 
@@ -2423,10 +2422,10 @@ def main():
     write_output(output, write_summary=args.write_summary)
 
     if args.compare:
-        date_readable = dt.fromtimestamp(app.techinfo.time_start).strftime('%A, %B %d, %Y')
+        upd = dt.fromtimestamp(app.techinfo.time_start)
         consumable_usage_comparison(
             data=app.print_consumables.calculate_consumes(),
-            label=f"Consumables usage information (prices last updated @ {date_readable})")
+            label=f"(Prices last updated @ {upd.strftime('%A, %B %d, %Y %I:%M:%S %p')})")
         return
 
     if args.write_consumable_totals_csv:
