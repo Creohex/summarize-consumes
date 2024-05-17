@@ -55,6 +55,38 @@ class CustomEncoder(json.JSONEncoder):
         return super().default(obj)
 
 
+class Config(dict):
+    def __init__(self, filepath=str, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.filepath = filepath
+
+    def save(self) -> None:
+        with open(self.filepath, "w+") as f:
+            json.dump(self, f, indent=2)
+
+    def delete(self):
+        check_existing_file(self.filepath, delete=True)
+
+    def update(self, upd_dict, **kwargs):
+        super().update(json.loads(json.dumps(upd_dict)), **kwargs)
+
+    @classmethod
+    def load(cls, filename):
+        # TODO: use some sort of temporary folder for win instead?
+        match sys.platform:
+            case "win32": conf_dir = Path(sys.executable).absolute().parent
+            case _: conf_dir = Path(__file__).absolute().parent
+
+        filepath = conf_dir / filename
+        if check_existing_file(filepath):
+            with open(filepath, "r") as f:
+                return cls(filepath, json.load(f))
+        else:
+            conf = cls(filepath, {})
+            conf.save()
+            return conf
+
+
 def upload_pastebin(output):
     url = BpasteUploader().upload(output)
     if url:
