@@ -13,9 +13,7 @@ import os
 import re
 import requests
 import time
-import webbrowser
 from datetime import datetime as dt
-from pathlib import Path
 
 import humanize
 import lark
@@ -24,8 +22,10 @@ import plotly.io as pio
 from bs4 import BeautifulSoup as bs
 from plotly.subplots import make_subplots
 
-from melbalabs.summarize_consumes import grammar
 import melbalabs.summarize_consumes.package as package
+from melbalabs.summarize_consumes import grammar, utils
+from melbalabs.summarize_consumes.utils import Config
+
 
 
 LarkError = lark.LarkError
@@ -1083,7 +1083,6 @@ class Dmgstore2:
 
 
 
-
 class Techinfo:
     def __init__(self, time_start, prices_last_update):
         self.time_start = time_start
@@ -1129,7 +1128,6 @@ class Techinfo:
         print('  ', f'log lines {self.linecount}', file=output)
         print('  ', f'skipped log lines {self.skiplinecount} {self.format_skipped_percent()}', file=output)
         print('  ', f'processed in {time_delta:.2f} seconds. {self.linecount / time_delta:.2f} log lines/sec', file=output)
-
 
 
 class UnparsedLogger:
@@ -1250,7 +1248,6 @@ def get_consumable_price(pricedb, consumable):
 
     total_price /= CONSUMABLE_CHARGES.get(consumable, 1)
     return total_price
-
 
 
 class PetHandler:
@@ -2455,13 +2452,13 @@ def main():
         feature()
 
     if not args.pastebin: return
-    url = upload_pastebin(output)
+    url = utils.upload_pastebin(output)
 
     if not args.open_browser: return
     if not url:
         print("didn't get a pastebin url")
         return
-    open_browser(url)
+    utils.open_browser(url)
 
 
 if __name__ == '__main__':
