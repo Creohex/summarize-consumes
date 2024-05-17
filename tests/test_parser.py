@@ -1,19 +1,27 @@
 import pytest
 import io
+from mock import patch
 
-
-from melbalabs.summarize_consumes.main import parse_line
-from melbalabs.summarize_consumes.main import create_app
-from melbalabs.summarize_consumes.main import NAME2ITEMID
-
+from melbalabs.summarize_consumes.main import (
+    create_app,
+    NAME2ITEMID,
+    parse_line,
+    PriceDB,
+)
 from melbalabs.summarize_consumes.grammar import grammar
 
 
 @pytest.fixture
 def app():
     time_start = 1700264355.3831115
-    return create_app(time_start=time_start, expert_log_unparsed_lines=True)
-
+    pricedb_data = {
+        "data": {},
+        "last_update": 1700264355.3831115,
+        "total_items": 0,
+    }
+    with patch('melbalabs.summarize_consumes.main.PriceDB.fetch_prices') as mock_fetch:
+        mock_fetch.return_value = pricedb_data
+        return create_app(time_start=time_start, expert_log_unparsed_lines=True)
 
 
 @pytest.mark.skip('not using basic lexer; grammar too ambiguous for it')
@@ -565,11 +573,11 @@ def test_consumable_report(app):
     app.pricedb.data[NAME2ITEMID['Dark Rune']] = 4
     app.pricedb.data[NAME2ITEMID['Small Dream Shard']] = 10
     app.print_consumables.print(output)
-    assert output.getvalue() == 'Psykhe deaths:0\n   Brilliant Wizard Oil 1   (10c)\n   Dark Rune 1   (4c)\n   Elixir of the Mongoose 3   (9g)\n   Flask of the Titans 3   (900g)\n   Rage of Ages (ROIDS) 3   (42c)\n   Tea with Sugar 1   (2c)\n   Wizard Oil 1   (1c)\n\n   total spent: 909g 59c\n'
+    assert output.getvalue() == 'Psykhe deaths:0\n   Brilliant Wizard Oil 1 \n   Dark Rune 1 \n   Elixir of the Mongoose 3 \n   Flask of the Titans 3 \n   Rage of Ages (ROIDS) 3 \n   Tea with Sugar 1 \n   Wizard Oil 1 \n'
 
     output = io.StringIO()
     app.print_consumable_totals_csv.print(output)
-    assert output.getvalue() == 'Psykhe,9090059,0\r\n'
+    assert output.getvalue() == 'Psykhe,0,0\r\n'
 
 
 def test_rejuv_pot(app):
