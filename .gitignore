@@ -3,6 +3,7 @@
 /sources/*
 /test_videos
 /config.toml
+prices.json
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
