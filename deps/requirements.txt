@@ -9,4 +9,5 @@ lark[interegular]==1.1.8  # via -r deps\requirements.in
 pandas==2.2.2
 plotly==5.22.0
 requests==2.31.0          # via -r deps\requirements.in
+typing_extensions==4.11.0
 urllib3==2.1.0            # via requests

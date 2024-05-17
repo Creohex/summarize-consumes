@@ -3,7 +3,7 @@ import requests
 import sys
 import webbrowser
 from pathlib import Path
-from typing import Self
+from typing_extensions import Self
 
 
 class IxioUploader:
