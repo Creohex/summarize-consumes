@@ -128,7 +128,9 @@ def create_app(time_start, expert_log_unparsed_lines):
 
     app.dmgstore = Dmgstore2(player=app.player, class_detection=app.class_detection, abilitycost=ABILITYCOST)
 
-    app.techinfo = Techinfo(time_start=time_start, prices_last_update=app.pricedb.last_update)
+    app.techinfo = Techinfo(time_start=time_start, prices_last_update=app.pricedb.data["last_update"])
+
+    app.infographic = Infographic(app.print_consumables)
 
     return app
 
@@ -1150,36 +1152,18 @@ class NullLogger:
     def flush(self):
         pass
 
+
 class PriceDB:
-    FILENAME_DEFAULT = "prices.json"
+    CONFIG_NAME = "prices.json"
 
-    def __init__(self, filename: str=FILENAME_DEFAULT):
-        self.data = dict()
-        self.last_update = 0
-        self.filepath = Path(__file__).absolute().parent / (filename or self.FILENAME_DEFAULT)
+    def __init__(self):
+        self.data = Config.load(self.CONFIG_NAME)
 
-        # webprices = dl_price_data()
-        # if webprices is not None:
-        #     incoming = webprices
-        #     self.load_incoming(incoming)
-        #     return
-
-        if not self.filepath.exists():
-            logging.warning(f'price data not available. {self.filepath} not found, trying to fetch fresh one...')
-            self.fetch_prices()
-        logging.info(f'loading local price data from {filename}')
-        with open(self.filepath) as f:
-            incoming = json.load(f)
-            self.load_incoming(incoming)
+        if not self.data:
+            self.refresh_data()
 
     def lookup(self, itemid):
-        return self.data.get(itemid)
-
-    def load_incoming(self, incoming):
-        self.last_update = incoming['last_update']
-        for key, val in incoming['data'].items():
-            key = int(key)
-            self.data[key] = val
+        return self.data["data"].get(itemid)
 
     @staticmethod
     def cost_representation_to_int(cost_string):
@@ -1210,7 +1194,7 @@ class PriceDB:
         cost_block = blocks[0].find_next_sibling()
         return cls.cost_representation_to_int(cost_block.text)
 
-    def fetch_prices(self):
+    def fetch_prices(self) -> dict:
         logging.info("Fetching current AH prices...")
         new_prices = {}
 
@@ -1225,14 +1209,17 @@ class PriceDB:
         for item_id, response in zip(ITEMID2NAME, all_responses):
             new_prices[item_id] = response
 
-        check_existing_file(self.filepath, force=True)
-        with open(self.filepath, "w") as fd:
-            json.dump({"data": collections.OrderedDict(sorted(new_prices.items())),
-                       "last_update": dt.now().timestamp(),
-                       "total_items": len(new_prices)},
-                      fd)
+        return {
+            "data": collections.OrderedDict(sorted(new_prices.items())),
+            "last_update": dt.now().timestamp(),
+            "total_items": len(new_prices),
+        }
 
-        logging.info(f"Prices have been updated -> {self.filepath}")
+    def refresh_data(self):
+        logging.info("Fetching fresh AH price data...")
+        self.data.update(self.fetch_prices())
+        self.data.save()
+        logging.info(f"Price data updated -> '{self.data.filepath}'")
 
 
 def get_consumable_price(pricedb, consumable):
@@ -1242,7 +1229,7 @@ def get_consumable_price(pricedb, consumable):
     for component, multiplicator in components:
         itemid = NAME2ITEMID.get(component)
         if not itemid: continue
-        price = pricedb.lookup(itemid)
+        price = pricedb.lookup(str(itemid))
         if not price: continue
         total_price += int(price * multiplicator)
 
@@ -2269,135 +2256,83 @@ def get_user_input():
     parser.add_argument('--compare-players', nargs=2, metavar=('PLAYER1', 'PLAYER2'), required=False, help='compare 2 players, output the difference in compare-players.txt')
     parser.add_argument('--expert-log-unparsed-lines', action='store_true', help='create an unparsed.txt with everything that was not parsed')
 
-    parser.add_argument('--fetch-ah', action='store_true', required=False, help='Fetch latest prices from auction house')
-    parser.add_argument('--compare', action='store_true', required=False, help='Compare players\'s consumable expenditures')
+    parser.add_argument('--update-prices', action='store_true', required=False, help='Fetch latest prices from auction house')
+    parser.add_argument('--visualize', action='store_true', required=False, help='Generate visual infographic')
 
     args = parser.parse_args()
 
     return args
 
 
-class IxioUploader:
-    def upload(self, output):
-        data = output.getvalue().encode('utf8')
+class Infographic:
+    BACKGROUND_COLOR = "#282B2C"
+    CONFIG_NAME = "visualization.json"
 
-        username, password = 'summarize_consumes', 'summarize_consumes'
-        auth = requests.auth.HTTPBasicAuth(username, password)
-        response = requests.post(
-            url='http://ix.io',
-            files={'f:1': data},
-            auth=auth,
-            timeout=30,
-        )
-        print(response.text)
-        if 'already exists' in response.text:
-            return None
-        if 'down for DDOS' in response.text:
-            return None
-        if 'ix.io is taking a break' in response.text:
-            return None
-        if response.status_code != 200:
-            return None
-        url = response.text.strip().split('\n')[-1]
-        return url
+    def __init__(self, app) -> None:
+        self.app = app
+        price_date = dt.fromtimestamp(app.pricedb.data["last_update"])
+        self.label = f"AH price data from: {price_date.strftime('%A, %B %d, %Y %I:%M:%S %p')}"
 
-class BpasteUploader:
-    def upload(self, output):
-        data = output.getvalue().encode('utf8')
-        response = requests.post(
-            url='https://bpaste.net/curl',
-            data={'raw': data, 'expiry': '1month'},
-            timeout=30,
-        )
-        if response.status_code != 200:
-            print(response.text)
-            return None
-        lines = response.text.splitlines()
-        for line in lines:
-            if 'Raw URL' in line:
-                url = line.split()[-1]
-                return url
+        self.config = Config.load(self.CONFIG_NAME)
+        if not self.config:
+            ...
 
+    def generate(self) -> None:
+        raw_data = self.app.calculate_consumes()
+        data = collections.OrderedDict(sorted(raw_data.items(),
+                                              key=lambda pair: -pair[1]["total_spent"]))
 
-def upload_pastebin(output):
-    url = BpasteUploader().upload(output)
-    if url: return url
-    url = IxioUploader().upload(output)
-    return url
+        categories = list(data)
+        bar_values = [v["total_spent"] / 10000 for v in data.values()]
 
-def open_browser(url):
-    print(f'opening browser with {url}')
-    webbrowser.open(url)
+        width = 3
+        height = len(data) // width + 2
+        specs = [[{'type': 'xy', 'colspan': width}] + [None] * (width - 1)]
+        specs.extend([[{'type': 'domain'}] * width] * (height - 1))
 
-def check_existing_file(file: Path, force: bool = False) -> None:
-    """Check if file exist and deletes it when forced to.
+        bar_chart_height = 400
+        pie_chart_height = 500
 
-    - file (Path): File location
-    - force (bool | None, optional (False)): delete file if True
-    """
-
-    if file.exists() and file.is_file():
-        if force or False:
-            file.unlink()
-        else:
-            raise Exception(f"file already exists: {file}")
-
-
-def consumable_usage_comparison(data: dict, label: str) -> None:
-
-    data = collections.OrderedDict(sorted(data.items(),
-                                          key=lambda pair: -pair[1]["total_spent"]))
-
-    categories = list(data)
-    bar_values = [v["total_spent"] / 10000 for v in data.values()]
-
-    width = 3
-    height = len(data) // width + 2
-    specs = [[{'type': 'xy', 'colspan': width}] + [None] * (width - 1)]
-    specs.extend([[{'type': 'domain'}] * width] * (height - 1))
-
-    bar_chart_height = 400
-    pie_chart_height = 500
-
-    fig = make_subplots(
+        fig = make_subplots(
             rows=height,
             cols=width,
             row_heights=[bar_chart_height] + [pie_chart_height] * (height - 1),
             subplot_titles=[None] + list(data),
             specs=specs)
 
-    fig.add_trace(go.Bar(x=categories,
-                         y=bar_values,
-                         name='Gold spent',
-                         text=[f"{v:.1f}g" for v in bar_values],
-                         textposition='outside'),
-                  row=1,
-                  col=1)
+        fig.add_trace(go.Bar(x=categories,
+                             y=bar_values,
+                             name='Gold spent',
+                             text=[f"{v:.1f}g" for v in bar_values],
+                             textposition='outside'),
+                      row=1,
+                      col=1)
 
-    for pos, name in enumerate(categories):
-        item_costs = [cost_data['price'] / 10000.0 for cost_data in data[name]["items"].values()]
-        item_texts = [f"(x{item_data['count']}, {cost:.1f}g)"
-                      for (item_data, cost)
-                      in zip(data[name]["items"].values(), item_costs)]
-        fig.add_trace(
-            go.Pie(labels=list(data[name]["items"].keys()),
-                   values=item_costs,
-                   text=item_texts,
-                   showlegend=False,
-                   textposition='inside',
-                   textinfo='label+percent+text',
-                   name=name),
-            row=(pos // width) + 2,
-            col=(pos % width) + 1)
+        for pos, name in enumerate(categories):
+            item_costs = [cost_data['price'] / 10000.0 for cost_data in data[name]["items"].values()]
+            item_texts = [f"(x{item_data['count']}, {cost:.1f}g)"
+                          for (item_data, cost)
+                          in zip(data[name]["items"].values(), item_costs)]
+            fig.add_trace(
+                go.Pie(labels=list(data[name]["items"].keys()),
+                       values=item_costs,
+                       text=item_texts,
+                       showlegend=False,
+                       textposition='inside',
+                       textinfo='label+percent+text',
+                       name=name),
+                row=(pos // width) + 2,
+                col=(pos % width) + 1)
 
-    fig.update_layout(title=label,
-                      template="plotly_dark",
-                      plot_bgcolor="#282B2C",
-                      paper_bgcolor="#282B2C",
-                      title_x=0.5,
-                      height=bar_chart_height + (pie_chart_height * height - 1))
+        fig.update_layout(title=self.label,
+                          template="plotly_dark",
+                          plot_bgcolor=self.BACKGROUND_COLOR,
+                          paper_bgcolor=self.BACKGROUND_COLOR,
+                          title_x=0.5,
+                          height=bar_chart_height + (pie_chart_height * height - 1))
 
-    fig.show(post_script=['document.body.style.backgroundColor = "#282B2C"; '])
+        script_bg = f'document.body.style.backgroundColor = "{self.BACKGROUND_COLOR}"; '
+        fig.show(post_script=[script_bg])
 
 
 def main():
@@ -2410,19 +2345,16 @@ def main():
         expert_log_unparsed_lines=args.expert_log_unparsed_lines,
     )
 
-    if args.fetch_ah:
-        app.pricedb.fetch_prices()
+    if args.update_prices:
+        app.pricedb.refresh_data()
 
     parse_log(app, filename=args.logpath)
 
     output = generate_output(app)
     write_output(output, write_summary=args.write_summary)
 
-    if args.compare:
-        upd = dt.fromtimestamp(app.techinfo.time_start)
-        consumable_usage_comparison(
-            data=app.print_consumables.calculate_consumes(),
-            label=f"(Prices last updated @ {upd.strftime('%A, %B %d, %Y %I:%M:%S %p')})")
+    if args.visualize:
+        app.infographic.generate()
         return
 
     if args.write_consumable_totals_csv:
