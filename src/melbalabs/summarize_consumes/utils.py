@@ -3,6 +3,7 @@ import requests
 import sys
 import webbrowser
 from pathlib import Path
+from typing import Self
 
 
 class IxioUploader:
@@ -71,7 +72,7 @@ class Config(dict):
         super().update(json.loads(json.dumps(upd_dict)), **kwargs)
 
     @classmethod
-    def load(cls, filename):
+    def load(cls, filename) -> Self:
         # TODO: use some sort of temporary folder for win instead?
         match sys.platform:
             case "win32": conf_dir = Path(sys.executable).absolute().parent

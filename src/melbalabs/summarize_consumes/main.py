@@ -130,7 +130,7 @@ def create_app(time_start, expert_log_unparsed_lines):
 
     app.techinfo = Techinfo(time_start=time_start, prices_last_update=app.pricedb.data["last_update"])
 
-    app.infographic = Infographic(app.print_consumables)
+    app.infographic = Infographic(app.print_consumables, app.class_detection)
 
     return app
 
@@ -2266,16 +2266,24 @@ def get_user_input():
 
 class Infographic:
     BACKGROUND_COLOR = "#282B2C"
-    CONFIG_NAME = "visualization.json"
+    CLASS_COLOURS = {
+        "druid": "#FF7D0A",
+        "hunter": "#ABD473",
+        "mage": "#69CCF0",
+        "paladin": "#F58CBA",
+        "priest": "#FFFFFF",
+        "rogue": "#FFF569",
+        "shaman": "#0070DE",
+        "warlock": "#9482C9",
+        "warrior": "#C79C6E",
+        "unknown": "#660099",
+    }
 
-    def __init__(self, app) -> None:
+    def __init__(self, app, detected_classes) -> None:
         self.app = app
+        self.detected_classes = detected_classes.store
         price_date = dt.fromtimestamp(app.pricedb.data["last_update"])
         self.label = f"AH price data from: {price_date.strftime('%A, %B %d, %Y %I:%M:%S %p')}"
-
-        self.config = Config.load(self.CONFIG_NAME)
-        if not self.config:
-            ...
 
     def generate(self) -> None:
         raw_data = self.app.calculate_consumes()
@@ -2283,6 +2291,7 @@ class Infographic:
                                               key=lambda pair: -pair[1]["total_spent"]))
 
         categories = list(data)
+        colors = [self.CLASS_COLOURS[self.detected_classes.get(name, "unknown")] for name in categories]
         bar_values = [v["total_spent"] / 10000 for v in data.values()]
 
         width = 3
@@ -2302,6 +2311,7 @@ class Infographic:
 
         fig.add_trace(go.Bar(x=categories,
                              y=bar_values,
+                             marker=dict(color=colors),
                              name='Gold spent',
                              text=[f"{v:.1f}g" for v in bar_values],
                              textposition='outside'),
